@@ -2,7 +2,8 @@ name: StockPilot APK Builder
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -17,12 +18,12 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.9
+          gradle-version: '8.9'
 
       - name: Build User APK
         run: gradle -p UserApp assembleDebug
@@ -30,10 +31,11 @@ jobs:
       - name: Build Developer APK
         run: gradle -p DeveloperApp assembleDebug
 
-      - name: Upload APK files
+      - name: Upload both APKs
         uses: actions/upload-artifact@v4
         with:
           name: StockPilot-Android-APKs
           path: |
             UserApp/app/build/outputs/apk/debug/*.apk
             DeveloperApp/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
