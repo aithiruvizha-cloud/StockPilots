@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
             new Handler(Looper.getMainLooper());
 
     private static final String API_URL =
-            "http://127.0.0.1:3002/api/supermarket/login";
+            "https://stockpilot-api-9rqp.onrender.com/api/supermarket/login";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -140,7 +140,8 @@ public class MainActivity extends Activity {
                     loginButton.setEnabled(true);
                     statusText.setTextColor(Color.RED);
                     statusText.setText(
-                            "Connection failed. Check your backend."
+                            "Error: " + e.getClass().getSimpleName()
+                            + " - " + String.valueOf(e.getMessage())
                     );
                 });
             } finally {
