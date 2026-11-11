@@ -1,143 +1,96 @@
 const express = require("express");
 const router = express.Router();
+const db = require("./pg-database");
+const { hashPassword, verifyPassword, createToken, verifyToken } = require("./auth");
 
-const db = require("./database");
-const { developerLogin } = require("./developer-auth");
-const { hashPassword } = require("./auth");
-const { authenticate, requireDeveloper } = require("./middleware");
+async function developerOnly(req, res, next) {
+    try {
+        const header = req.headers.authorization || "";
+        const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+        if (!token) return res.status(401).json({success:false,message:"Login required"});
+        const user = verifyToken(token);
+        if (user.role !== "developer") return res.status(403).json({success:false,message:"Developer access required"});
+        req.developer = user;
+        next();
+    } catch {
+        res.status(401).json({success:false,message:"Invalid or expired login"});
+    }
+}
 
-// Developer login
 router.post("/login", async (req, res) => {
     try {
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-            return res.status(400).json({
-                success: false,
-                message: "Email and password are required."
-            });
+        const {email, password} = req.body;
+        if (!email || !password) return res.status(400).json({success:false,message:"Enter email and password"});
+        const result = await db.query(
+            "SELECT id,email,password_hash FROM developer_accounts WHERE LOWER(email)=LOWER($1)",
+            [email.trim()]
+        );
+        const developer = result.rows[0];
+        if (!developer || !(await verifyPassword(password, developer.password_hash))) {
+            return res.status(401).json({success:false,message:"Invalid developer credentials"});
         }
-
-        const token = await developerLogin(email, password);
-
-        res.json({
-            success: true,
-            message: "Developer login successful.",
-            token
-        });
-    } catch {
-        res.status(401).json({
-            success: false,
-            message: "Invalid developer credentials."
-        });
+        const token = createToken({id:developer.id,role:"developer"});
+        res.json({success:true,token,message:"Developer login successful"});
+    } catch (e) {
+        res.status(500).json({success:false,message:e.message});
     }
 });
 
-// Verify developer
-router.get("/verify", authenticate, requireDeveloper, (req, res) => {
-    res.json({
-        success: true,
-        message: "Developer authentication verified."
-    });
-});
+router.use(developerOnly);
 
-// Create supermarket
-router.post("/supermarkets", authenticate, requireDeveloper, async (req, res) => {
+router.get("/users", async (req,res) => {
     try {
-        const { name, email, password } = req.body;
+        const result = await db.query(
+            `SELECT id, name AS supermarket_name, owner_name, email, is_active, created_at
+             FROM supermarkets ORDER BY id DESC`
+        );
+        res.json({success:true,users:result.rows});
+    } catch(e) {
+        res.status(500).json({success:false,message:e.message});
+    }
+});
 
-        if (!name || !email || !password || password.length < 12) {
-            return res.status(400).json({
-                success: false,
-                message: "Provide name, email and password of at least 12 characters."
-            });
+router.post("/users", async (req,res) => {
+    try {
+        const {name, email, password, supermarketName} = req.body;
+        if (!name || !email || !password || !supermarketName) {
+            return res.status(400).json({success:false,message:"Enter user name, email, password and supermarket name"});
         }
-
-        const cleanEmail = email.trim().toLowerCase();
-
-        const existing = db.prepare(
-            "SELECT id FROM supermarkets WHERE email = ?"
-        ).get(cleanEmail);
-
-        if (existing) {
-            return res.status(409).json({
-                success: false,
-                message: "This email is already registered."
-            });
+        if (password.length < 8) {
+            return res.status(400).json({success:false,message:"Password must contain at least 8 characters"});
         }
-
         const passwordHash = await hashPassword(password);
-
-        const result = db.prepare(`
-            INSERT INTO supermarkets (name, email, password_hash)
-            VALUES (?, ?, ?)
-        `).run(name.trim(), cleanEmail, passwordHash);
-
-        res.status(201).json({
-            success: true,
-            message: "Supermarket account created successfully.",
-            supermarket: {
-                id: Number(result.lastInsertRowid),
-                name: name.trim(),
-                email: cleanEmail,
-                is_active: true
-            }
-        });
-    } catch (error) {
-        console.error("Supermarket creation error:", error.message);
-        res.status(500).json({
-            success: false,
-            message: "Unable to create supermarket account."
+        const result = await db.query(
+            `INSERT INTO supermarkets (name, owner_name, email, password_hash, is_active)
+             VALUES ($1,$2,$3,$4,TRUE)
+             RETURNING id,name,owner_name,email,is_active,created_at`,
+            [supermarketName.trim(), name.trim(), email.trim().toLowerCase(), passwordHash]
+        );
+        res.status(201).json({success:true,user:result.rows[0],message:"User created successfully"});
+    } catch(e) {
+        const duplicate = e.code === "23505";
+        res.status(duplicate ? 409 : 500).json({
+            success:false,
+            message:duplicate ? "This email is already registered" : e.message
         });
     }
 });
 
-// View all supermarkets
-router.get("/supermarkets", authenticate, requireDeveloper, (req, res) => {
-    const supermarkets = db.prepare(`
-        SELECT id, name, email, is_active, created_at
-        FROM supermarkets
-        ORDER BY id DESC
-    `).all();
-
-    res.json({
-        success: true,
-        supermarkets
-    });
-});
-
-// Activate or deactivate a supermarket
-router.patch("/supermarkets/:id/status", authenticate, requireDeveloper, (req, res) => {
-    const id = Number(req.params.id);
-    const { is_active } = req.body;
-
-    if (!Number.isInteger(id) || id < 1 ||
-        typeof is_active !== "boolean") {
-        return res.status(400).json({
-            success: false,
-            message: "Provide a valid supermarket ID and true/false status."
-        });
+router.patch("/users/:id/status", async (req,res) => {
+    try {
+        const {active} = req.body;
+        if (typeof active !== "boolean") {
+            return res.status(400).json({success:false,message:"active must be true or false"});
+        }
+        const result = await db.query(
+            "UPDATE supermarkets SET is_active=$1 WHERE id=$2 RETURNING id,email,is_active",
+            [active,req.params.id]
+        );
+        if (!result.rowCount) return res.status(404).json({success:false,message:"User not found"});
+        res.json({success:true,user:result.rows[0],message:active ? "User activated" : "User deactivated"});
+    } catch(e) {
+        res.status(500).json({success:false,message:e.message});
     }
-
-    const result = db.prepare(`
-        UPDATE supermarkets
-        SET is_active = ?
-        WHERE id = ?
-    `).run(is_active ? 1 : 0, id);
-
-    if (result.changes === 0) {
-        return res.status(404).json({
-            success: false,
-            message: "Supermarket account not found."
-        });
-    }
-
-    res.json({
-        success: true,
-        message: is_active
-            ? "Supermarket account activated."
-            : "Supermarket account deactivated."
-    });
 });
 
 module.exports = router;

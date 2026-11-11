@@ -1,4 +1,4 @@
-const db = require("./database");
+const db = require("./pg-database");
 const { verifyPassword, createToken } = require("./auth");
 
 async function supermarketLogin(email, password) {
@@ -6,17 +6,20 @@ async function supermarketLogin(email, password) {
         throw new Error("Email and password are required.");
     }
 
-    const supermarket = db.prepare(`
-        SELECT id, name, email, password_hash, is_active
-        FROM supermarkets
-        WHERE email = ?
-    `).get(email.trim().toLowerCase());
+    const result = await db.query(
+        `SELECT id, name, email, password_hash, is_active
+         FROM supermarkets
+         WHERE LOWER(email) = LOWER($1)`,
+        [email.trim()]
+    );
+
+    const supermarket = result.rows[0];
 
     if (!supermarket) {
         throw new Error("Invalid email or password.");
     }
 
-    if (supermarket.is_active !== 1) {
+    if (!supermarket.is_active) {
         throw new Error("This supermarket account is deactivated.");
     }
 

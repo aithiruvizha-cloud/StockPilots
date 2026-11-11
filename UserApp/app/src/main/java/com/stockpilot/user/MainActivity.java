@@ -81,7 +81,11 @@ public class MainActivity extends Activity {
         return o;
     }
 
-    private void work(String loading, Runnable task) {
+    private interface WorkTask {
+        void run() throws Exception;
+    }
+
+    private void work(String loading, WorkTask task) {
         Toast.makeText(this, loading, Toast.LENGTH_SHORT).show();
         executor.execute(() -> {
             try {
@@ -269,19 +273,29 @@ public class MainActivity extends Activity {
         EditText autoQty = field("Automatic reorder quantity");
         EditText dealerId = field("Dealer ID (optional)");
 
-        button("ADD PRODUCT", () -> work("Saving product...", () -> {
-            JSONObject b = new JSONObject();
-            b.put("name", name.getText().toString().trim());
-            b.put("barcode", barcode.getText().toString().trim());
-            b.put("purchase_cost", number(cost));
-            b.put("mrp", number(mrp));
-            b.put("selling_price", number(price));
-            b.put("quantity", number(qty));
-            b.put("low_stock_threshold", number(threshold));
-            b.put("auto_order_quantity", number(autoQty));
+        button("ADD PRODUCT", () -> {
+            String productName = name.getText().toString().trim();
+            String productBarcode = barcode.getText().toString().trim();
+            double purchaseCost = number(cost);
+            double productMrp = number(mrp);
+            double sellingPrice = number(price);
+            double openingQty = number(qty);
+            double lowThreshold = number(threshold);
+            double reorderQty = number(autoQty);
+            String dealer = dealerId.getText().toString().trim();
 
-            String d = dealerId.getText().toString().trim();
-            if (!d.isEmpty()) b.put("dealer_id", Long.parseLong(d));
+            work("Saving product...", () -> {
+            JSONObject b = new JSONObject();
+            b.put("name", productName);
+            b.put("barcode", productBarcode);
+            b.put("purchase_cost", purchaseCost);
+            b.put("mrp", productMrp);
+            b.put("selling_price", sellingPrice);
+            b.put("quantity", openingQty);
+            b.put("low_stock_threshold", lowThreshold);
+            b.put("auto_order_quantity", reorderQty);
+
+            if (!dealer.isEmpty()) b.put("dealer_id", Long.parseLong(dealer));
 
             JSONObject r = api("/operations/products", "POST", b);
             handler.post(() -> {
@@ -290,11 +304,13 @@ public class MainActivity extends Activity {
                     : r.optString("message", "Could not add product"));
                 if (r.optBoolean("success")) products();
             });
-        }));
+            });
+        });
 
         EditText search = field("Enter barcode to search");
-        button("SEARCH BARCODE", () -> work("Searching...", () -> {
+        button("SEARCH BARCODE", () -> {
             String code = search.getText().toString().trim();
+            work("Searching...", () -> {
             JSONObject r = api(
                 "/operations/products/barcode/" +
                 URLEncoder.encode(code, "UTF-8"), "GET", null
@@ -350,17 +366,23 @@ public class MainActivity extends Activity {
         EditText qty = field("Quantity change (+ add, - remove)");
         EditText reason = field("Reason");
 
-        button("ADJUST STOCK", () -> work("Updating stock...", () -> {
+        button("ADJUST STOCK", () -> {
+            String productId = id.getText().toString().trim();
+            double changeQty = number(qty);
+            String changeReason = reason.getText().toString().trim();
+
+            work("Updating stock...", () -> {
             JSONObject b = new JSONObject();
-            b.put("product_id", Long.parseLong(id.getText().toString()));
-            b.put("quantity", number(qty));
-            b.put("reason", reason.getText().toString());
+            b.put("product_id", Long.parseLong(productId));
+            b.put("quantity", changeQty);
+            b.put("reason", changeReason);
 
             JSONObject r = api("/operations/stock/adjust", "POST", b);
             handler.post(() -> message(r.optBoolean("success")
                 ? "New stock: " + r.optString("newStock")
                 : r.optString("message", "Stock update failed")));
-        }));
+            });
+        });
 
         button("CHECK LOW STOCK & CREATE ORDERS", () ->
             work("Checking low stock...", () -> {
@@ -384,17 +406,23 @@ public class MainActivity extends Activity {
         EditText phone = field("Phone");
         EditText email = field("Email");
 
-        button("ADD DEALER", () -> work("Saving dealer...", () -> {
+        button("ADD DEALER", () -> {
+            String dealerName = name.getText().toString().trim();
+            String dealerPhone = phone.getText().toString().trim();
+            String dealerEmail = email.getText().toString().trim();
+
+            work("Saving dealer...", () -> {
             JSONObject b = new JSONObject();
-            b.put("name", name.getText().toString().trim());
-            b.put("phone", phone.getText().toString().trim());
-            b.put("email", email.getText().toString().trim());
+            b.put("name", dealerName);
+            b.put("phone", dealerPhone);
+            b.put("email", dealerEmail);
 
             JSONObject r = api("/operations/dealers", "POST", b);
             handler.post(() -> message(r.optBoolean("success")
                 ? "Dealer added. ID: " + r.optString("id")
                 : r.optString("message", "Failed")));
-        }));
+            });
+        });
 
         button("VIEW DEALERS", () -> work("Loading dealers...", () -> {
             JSONObject r = api("/operations/dealers", "GET", null);
@@ -485,18 +513,22 @@ public class MainActivity extends Activity {
                 message("Add items first");
                 return;
             }
+            String customerEmail = customer.getText().toString().trim();
+            String method = payment.getText().toString().trim();
+            java.util.LinkedHashMap<Long, Double> cartSnapshot =
+                new java.util.LinkedHashMap<>(billItems);
+
             work("Creating invoice...", () -> {
                 JSONObject b = new JSONObject();
                 JSONArray items = new JSONArray();
-                for (Long id : billItems.keySet()) {
+                for (Long id : cartSnapshot.keySet()) {
                     JSONObject item = new JSONObject();
                     item.put("product_id", id);
-                    item.put("quantity", billItems.get(id));
+                    item.put("quantity", cartSnapshot.get(id));
                     items.put(item);
                 }
                 b.put("items", items);
-                b.put("customer_email", customer.getText().toString().trim());
-                String method = payment.getText().toString().trim();
+                b.put("customer_email", customerEmail);
                 b.put("payment_method", method.isEmpty() ? "Cash" : method);
 
                 JSONObject r = api("/operations/billing", "POST", b);
