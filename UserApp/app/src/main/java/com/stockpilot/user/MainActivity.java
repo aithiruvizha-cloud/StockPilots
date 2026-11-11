@@ -323,7 +323,8 @@ public class MainActivity extends Activity {
                         p.optString("current_stock"));
                 } else message(r.optString("message", "Not found"));
             });
-        }));
+            });
+        });
 
         button("VIEW PRODUCTS", this::loadProducts);
         backButton();
